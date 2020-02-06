@@ -1,0 +1,11 @@
+{
+    "type": "record",
+    "namespace": "avro",
+    "name": "MoaiiEvent",
+    "doc": "MOAII event model",
+    "fields": [
+        {"name": "incidenceId", "type": "long"},
+        {"name": "eventId", "type": "long"},
+        {"name": "time", "type": "long", "logicalType": "timestamp-millis"}
+    ]
+}
