@@ -1,7 +1,9 @@
 package com.msa;
 
 import avro.MoaiiEvent;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -9,6 +11,11 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.SessionWindows;
 import org.apache.kafka.streams.kstream.Suppressed;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
+
+
 
 import java.time.Duration;
 import java.util.Properties;
@@ -16,6 +23,9 @@ import java.util.Properties;
 public class MoaiiAvroApp
 {
     private final static String KAFKA_SERVER = "localhost:9092";
+    private final static String SCHEMA_REGISTRY_SERVER = "localhost:9092";
+
+
 
     public static void main(String[] args)
     {
@@ -24,6 +34,11 @@ public class MoaiiAvroApp
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "moaii-application-demo");
         config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_SERVER);
         config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest"); //We read from the start of the topic
+        config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
+       // config.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
+      //  config.put(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_SERVER);
+
 
         //disable the cache to demonstrate all the "steps" involved in the transformation
         // NOT RECOMMENDED IN PRODUCTION
