@@ -1,14 +1,14 @@
 package com.msa;
 
-import avro.MoaiiEvent;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
-import io.confluent.kafka.serializers.KafkaAvroSerializer;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -16,10 +16,12 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public class MoaiiProducer
 {
-    private final static String KAFKA_SERVER = "localhost:9092";
-    private final static String TOPIC = "moaii-incidences";
-    private final static String SCHEMA_REGISTRY_URL = "localhost:8081";
+    private final static String KAFKA_SERVER = "http://localhost:9092";
+    private final static String EVENT_TOPIC = "events";
+    private final static String INCIDENCE_TOPIC = "incidences";
+    private final static String SCHEMA_REGISTRY_URL = "http://localhost:8081";
     private static List<Integer> generatedIds = new ArrayList<>();
+
 
     public static void main(String[] args)
     {
@@ -37,17 +39,47 @@ public class MoaiiProducer
         config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
         config.put("schema.registry.url", SCHEMA_REGISTRY_URL);
 
-        Producer<String, MoaiiEvent> producer = new KafkaProducer(config);
+        Producer<Long, MoaiiEvent> eventProducer = new KafkaProducer(config);
+        Producer<Long, Integer> incidenceProducer = new KafkaProducer(config);
 
         int i = 0;
         while (true)
         {
-            System.out.println("Producing record: " + i);
             try
             {
-                producer.send(createRecord());
+                ProducerRecord<Long, MoaiiEvent> eventRecord = createEventRecord();
+//                ProducerRecord<Long, Integer> incidenceRecord = new ProducerRecord<Long, Integer>(INCIDENCE_TOPIC, eventRecord.key(), 50);
+
+//                incidenceProducer.send(incidenceRecord,
+//                        ((metadata, exception) ->
+//                        {
+//                            if (exception == null)
+//                            {
+//                                System.out.println("incidence sended");
+//                                System.out.println(metadata.toString());
+//                                System.out.println("*************************");
+//                            }
+//                            else
+//                            {
+//                                exception.printStackTrace();
+//                            }
+//                        }));
+
+                eventProducer.send(eventRecord,
+                        (metadata, exception) ->
+                        {
+                            if (exception == null)
+                            {
+                                System.out.println("event sended");
+                                System.out.println(metadata.toString());
+                                System.out.println("*************************");
+                            } else
+                            {
+                                exception.printStackTrace();
+                            }
+                        });
                 //producer.send(createRecord2());
-                Thread.sleep(100);
+                Thread.sleep(ThreadLocalRandom.current().nextInt(0, 10000));
 
             } catch (InterruptedException e)
             {
@@ -55,21 +87,35 @@ public class MoaiiProducer
             }
             i++;
         }
-        producer.close();
+        eventProducer.flush();
+        eventProducer.close();
     }
 
-    private static ProducerRecord<String, MoaiiEvent> createRecord()
+    private static ProducerRecord<Long, MoaiiEvent> createEventRecord()
     {
         MoaiiEvent.Builder eventBuilder = MoaiiEvent.newBuilder();
         //random incidenceId / key
         Integer incidenceId = ThreadLocalRandom.current().nextInt(0, 9999);
         eventBuilder.setIncidenceId(incidenceId);
+        generatedIds.add(incidenceId);
+
         Integer eventId = ThreadLocalRandom.current().nextInt(0, 99);
         eventBuilder.setEventId(eventId);
         Long timeMillis = System.currentTimeMillis();
         eventBuilder.setTime(timeMillis);
 
-        return new ProducerRecord<>(TOPIC, incidenceId.toString(), eventBuilder.build());
+        //type 5 = cancel
+        eventBuilder.setIncidenceType(ThreadLocalRandom.current().nextInt(0, 5));
+        //repeating ids 1/25 of the times
+        if (ThreadLocalRandom.current().nextInt(5) == ThreadLocalRandom.current().nextInt(5))
+        {
+            Integer repeatedId = generatedIds
+                    .get(ThreadLocalRandom.current()
+                            .nextInt(0, generatedIds.size()));
+            eventBuilder.setIncidenceId(repeatedId);
+        }
+
+        return new ProducerRecord<>(EVENT_TOPIC, eventBuilder.build());
     }
 
     private static ProducerRecord<String, String> createRecord2()
@@ -93,9 +139,9 @@ public class MoaiiProducer
                     .get(ThreadLocalRandom.current()
                             .nextInt(0, generatedIds.size())).toString();
 
-            return new ProducerRecord<>(TOPIC, repeatedId, incidence.toString());
+            return new ProducerRecord<>(EVENT_TOPIC, repeatedId, incidence.toString());
         }
-        return new ProducerRecord<>(TOPIC, incidenceId.toString(), incidence.toString());
+        return new ProducerRecord<>(EVENT_TOPIC, incidenceId.toString(), incidence.toString());
     }
 
 }

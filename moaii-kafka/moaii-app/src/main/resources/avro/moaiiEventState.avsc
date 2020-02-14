@@ -1,0 +1,10 @@
+{
+    "type": "record",
+    "namespace": "com.msa",
+    "name": "MoaiiEventState",
+    "doc": "MOAII event state model",
+    "fields": [
+        {"name": "incidenceId", "type": "long"},
+        {"name": "state", "type": "string"}
+    ]
+}

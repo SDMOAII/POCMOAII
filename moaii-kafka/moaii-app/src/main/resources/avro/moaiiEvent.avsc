@@ -1,11 +1,12 @@
 {
     "type": "record",
-    "namespace": "avro",
+    "namespace": "com.msa",
     "name": "MoaiiEvent",
     "doc": "MOAII event model",
     "fields": [
         {"name": "incidenceId", "type": "long"},
         {"name": "eventId", "type": "long"},
-        {"name": "time", "type": "long", "logicalType": "timestamp-millis"}
+        {"name": "time", "type": "long", "logicalType": "timestamp-millis"},
+        {"name": "incidenceType", "type":"int", "default": 0}
     ]
 }

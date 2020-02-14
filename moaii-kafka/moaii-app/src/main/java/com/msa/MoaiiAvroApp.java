@@ -1,83 +1,120 @@
 package com.msa;
 
-import avro.MoaiiEvent;
-import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
+
+import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.SessionWindows;
-import org.apache.kafka.streams.kstream.Suppressed;
-import io.confluent.kafka.serializers.KafkaAvroSerializer;
-import io.confluent.kafka.serializers.KafkaAvroDeserializer;
-import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
-
-
+import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.state.SessionStore;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Properties;
 
 public class MoaiiAvroApp
 {
-    private final static String KAFKA_SERVER = "localhost:9092";
-    private final static String SCHEMA_REGISTRY_SERVER = "localhost:9092";
-
-
+    private final static String KAFKA_SERVER = "http://localhost:9092";
+    private final static String SCHEMA_REGISTRY_URL = "http://localhost:8081";
 
     public static void main(String[] args)
+    {
+        MoaiiAvroApp app = new MoaiiAvroApp();
+        app.start();
+    }
+
+    private void start()
+    {
+        Properties config = getKafkaConfig();
+        KafkaStreams streams = createTopology(config);
+        streams.cleanUp();
+        streams.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
+    }
+
+    private Properties getKafkaConfig()
     {
         Properties config = new Properties();
 
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "moaii-application-demo");
         config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_SERVER);
-        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest"); //We read from the start of the topic
-        config.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
-        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
-       // config.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
-      //  config.put(AbstractKafkaAvroSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_SERVER);
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, SpecificAvroSerde.class.getName());
+        config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, SpecificAvroSerde.class.getName());
+        config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE);
+        ;
+        config.put(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_URL);
 
+        return config;
+    }
 
-        //disable the cache to demonstrate all the "steps" involved in the transformation
-        // NOT RECOMMENDED IN PRODUCTION
-        config.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, "0");
-        //Exactly one processing
-        config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.AT_LEAST_ONCE);
+    private KafkaStreams createTopology(Properties config)
+    {
+        SpecificAvroSerde<MoaiiEvent> moaiiEventSerde = new SpecificAvroSerde<>();
+        moaiiEventSerde.configure(Collections.singletonMap(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_URL), false);
 
-        //json SerDe
-//        final Serializer<JsonNode> jsonSerializer = new JsonSerializer();
-//        final Deserializer<JsonNode> jsonDeserializer = new JsonDeserializer();
-//        final Serde<JsonNode> jsonSerde = Serdes.serdeFrom(jsonSerializer, jsonDeserializer);
-//        final SessionWindowedSerde sessionKeySerde = new SessionWindowedSerde(Serdes.String());
-//        final Produced produced = Produced.with(sessionKeySerde, Serdes.Long());
-////        final Produced produced = Produced.with(sessionKeySerde, jsonSerde);
         StreamsBuilder builder = new StreamsBuilder();
 
-        KStream<String, MoaiiEvent> events = builder.stream("moaii-incidences");
+        Duration windowSizeDuration = Duration.ofSeconds(10);
+        KStream<Long, MoaiiEvent> eventStream = builder
+                .stream("moaii-incidences", Consumed.with(Serdes.Long(), moaiiEventSerde))
+                .selectKey((key, event) -> event.getIncidenceId());
 
-       // Produced<String, JsonNode> produced = Produced.with(Serdes.String(), jsonSerde);
-        events
-            .peek((key, value) -> System.out.println("Ktable : key=" + key + ", value="+ value ))
-            .groupByKey()
-            .windowedBy(SessionWindows.with(Duration.ofSeconds(10)))
-            .count()
-            .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
-            .filter((key, value) -> value.equals(1))
-            .toStream()
-            .to("moaii-missing-events");
+        SessionWindows sessionWindow = SessionWindows.with(Duration.ofSeconds(5));
 
+        //Since our topic has no key, we select the key(incidenceId) from Payload
+        //Didn't write the event including the key just for Development test and learning
+        SessionWindowedKStream<Long, MoaiiEvent> windowedEventTable = eventStream
+                .peek(((key, event) -> System.out.println("Key : " + key + ", Event : " + event)))
+                .groupByKey()
+                .windowedBy(sessionWindow);
+
+        //Detecting missing events
+        KTable<Windowed<Long>, Long> missingEventTable = windowedEventTable
+                .count(
+                        Materialized.<Long, Long, SessionStore<Bytes, byte[]>>as("timeout-incidences")
+                                .withValueSerde(Serdes.Long())
+                )
+                .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()));
+
+        //detecting patterns
+        KTable<Windowed<Long>, HashMap<String, Integer>> patternTable = windowedEventTable
+                .aggregate(
+                        () -> new HashMap<String, Integer>(),
+                        (key, value, aggregate) ->
+                        {
+
+                            aggregate.put(Long.toString(value.getTime()), value.getIncidenceType());
+                            return aggregate;
+                        },
+                        (aggKey, aggOne, aggTwo) ->
+                        {
+                            HashMap<String, Integer> finalMap = new HashMap<String, Integer>();
+                            finalMap.putAll(aggOne);
+                            finalMap.putAll(aggTwo);
+                            return finalMap;
+                        },
+                        Materialized.as("pattern-state-store")
+                );
+
+        //write results to a topic
+        missingEventTable
+                .toStream()
+                .to("missing-events", Produced.with(WindowedSerdes.sessionWindowedSerdeFrom(Long.class), Serdes.Long()));
+
+        patternTable
+                .toStream()
+                .to("patterns");
 
         Topology topology = builder.build();
-        KafkaStreams streams = new KafkaStreams(topology, config);
-        streams.cleanUp();
-        streams.start();
-
-        //print the topology
         System.out.println(topology.describe());
-
-        //add shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(streams::close));
+        return new KafkaStreams(topology, config);
     }
-}
+
+}  
