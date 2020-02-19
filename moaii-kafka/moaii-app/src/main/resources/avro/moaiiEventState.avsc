@@ -5,6 +5,8 @@
     "doc": "MOAII event state model",
     "fields": [
         {"name": "incidenceId", "type": "long"},
-        {"name": "state", "type": "string"}
+        {"name": "state", "type": {"type": "map", "values": "int"}}
+          ]
+        }
     ]
 }

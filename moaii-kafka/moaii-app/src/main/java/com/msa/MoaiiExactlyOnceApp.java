@@ -29,7 +29,7 @@ public class MoaiiExactlyOnceApp
 
         config.put(StreamsConfig.APPLICATION_ID_CONFIG, "moaii-application-demo");
         config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_SERVER);
-        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest"); //We read from the start of the topic
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"); //We read from the start of the topic
 
         //disable the cache to demonstrate all the "steps" involved in the transformation
         // NOT RECOMMENDED IN PRODUCTION
@@ -46,7 +46,7 @@ public class MoaiiExactlyOnceApp
 //        final Produced produced = Produced.with(sessionKeySerde, jsonSerde);
         StreamsBuilder builder = new StreamsBuilder();
 
-        KStream<String, JsonNode> events = builder.stream("moaii-incidences");
+        KStream<String, JsonNode> events = builder.stream("events");
 
        // Produced<String, JsonNode> produced = Produced.with(Serdes.String(), jsonSerde);
         events
@@ -56,8 +56,8 @@ public class MoaiiExactlyOnceApp
             .count(Materialized.with(sessionKeySerde, jsonSerde))
             .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()))
             .filter((key, value) -> value.equals(1))
-            .toStream()
-            .to("moaii-missing-events", produced);
+            .toStream();
+           // .to("moaii-missing-events", produced);
 
 
         Topology topology = builder.build();

@@ -46,7 +46,7 @@ public class MoaiiAvroApp
         config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_SERVER);
         config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, SpecificAvroSerde.class.getName());
-        config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, SpecificAvroSerde.class.getName());
+        config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.Long().getClass().getName());
         config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE);
         ;
         config.put(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_URL);
@@ -59,58 +59,66 @@ public class MoaiiAvroApp
         SpecificAvroSerde<MoaiiEvent> moaiiEventSerde = new SpecificAvroSerde<>();
         moaiiEventSerde.configure(Collections.singletonMap(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_URL), false);
 
+        SpecificAvroSerde<MoaiiEventState> moaiiStateSerde = new SpecificAvroSerde<MoaiiEventState>();
+        moaiiStateSerde.configure(Collections.singletonMap(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY_URL), false);
+
+
+
         StreamsBuilder builder = new StreamsBuilder();
 
         Duration windowSizeDuration = Duration.ofSeconds(10);
         KStream<Long, MoaiiEvent> eventStream = builder
-                .stream("moaii-incidences", Consumed.with(Serdes.Long(), moaiiEventSerde))
+                .stream("events", Consumed.with(Serdes.Long(), moaiiEventSerde))
                 .selectKey((key, event) -> event.getIncidenceId());
 
-        SessionWindows sessionWindow = SessionWindows.with(Duration.ofSeconds(5));
+      SessionWindows sessionWindow = SessionWindows.with(Duration.ofSeconds(5));
 
         //Since our topic has no key, we select the key(incidenceId) from Payload
         //Didn't write the event including the key just for Development test and learning
         SessionWindowedKStream<Long, MoaiiEvent> windowedEventTable = eventStream
-                .peek(((key, event) -> System.out.println("Key : " + key + ", Event : " + event)))
+               .peek(((key, event) -> System.out.println("Key : " + key + ", Event : " + event)))
                 .groupByKey()
                 .windowedBy(sessionWindow);
 
-        //Detecting missing events
-        KTable<Windowed<Long>, Long> missingEventTable = windowedEventTable
+         //Detecting missing events
+           KTable<Windowed<Long>, Long> missingEventTable = windowedEventTable
                 .count(
                         Materialized.<Long, Long, SessionStore<Bytes, byte[]>>as("timeout-incidences")
                                 .withValueSerde(Serdes.Long())
                 )
                 .suppress(Suppressed.untilWindowCloses(Suppressed.BufferConfig.unbounded()));
 
-        //detecting patterns
-        KTable<Windowed<Long>, HashMap<String, Integer>> patternTable = windowedEventTable
+         //detecting patterns
+     KTable<Windowed<Long>, MoaiiEventState> patternTable = windowedEventTable
                 .aggregate(
-                        () -> new HashMap<String, Integer>(),
+                        () -> new MoaiiEventState(0L,new HashMap<String,Integer>()),
                         (key, value, aggregate) ->
                         {
-
-                            aggregate.put(Long.toString(value.getTime()), value.getIncidenceType());
-                            return aggregate;
+                          //  aggregate.put(Long.toString(value.getTime()), value.getIncidenceType());
+                           aggregate.getState().put(Long.toString(value.getTime()),  value.getIncidenceType());
+                           return aggregate;
                         },
                         (aggKey, aggOne, aggTwo) ->
                         {
-                            HashMap<String, Integer> finalMap = new HashMap<String, Integer>();
-                            finalMap.putAll(aggOne);
-                            finalMap.putAll(aggTwo);
-                            return finalMap;
+                            MoaiiEventState finalState = new MoaiiEventState();
+                            finalState.getState().putAll(aggOne.getState());
+                            finalState.getState().putAll((aggTwo.getState()));
+                            return finalState;
                         },
                         Materialized.as("pattern-state-store")
+
                 );
 
         //write results to a topic
         missingEventTable
                 .toStream()
+                .peek(((key, event) -> System.out.println("Missing event  " +  "Key : " + key + ", Event : " + event)))
                 .to("missing-events", Produced.with(WindowedSerdes.sessionWindowedSerdeFrom(Long.class), Serdes.Long()));
 
         patternTable
                 .toStream()
-                .to("patterns");
+                .peek(((key, event) -> System.out.println("Pattern event  " +  "Key : " + key + ", Event : " + event)))
+                .to("patterns");/**/
 
         Topology topology = builder.build();
         System.out.println(topology.describe());
